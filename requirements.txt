@@ -1,0 +1,7 @@
+# Inference only. See pyproject.toml extras for datasets / web / train.
+#   pip install -e .            inference
+#   pip install -e '.[all]'     everything, including training
+numpy<2
+torch>=2.4
+torchaudio>=2.4
+soundfile>=0.12

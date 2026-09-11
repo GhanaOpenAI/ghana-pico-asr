@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# artefacts
+*.pt
+*.npy
+*.npz
+scratch/
+outputs/
+*_samples.json
+*_comparison.json
+context_probe_*.json
+sweep_results.json
+
+# run handles and call ids: machine-local pointers at someone's own
+# Modal/HF account, useless to anyone else and a needless leak of workspace
+# structure.
+.spawned_runs.json
+.spawned_runs.*.json
+.hf_jobs.json
+.migrate_*_call
+
+# conversation exports — transcripts of a working session, not source
+export-*.txt

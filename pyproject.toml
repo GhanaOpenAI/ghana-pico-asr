@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghana-pico-asr"
+version = "0.1.0"
+description = "A compact grapheme-unit speech recogniser for Ghanaian languages"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "CC-BY-NC-4.0" }
+authors = [{ name = "GhanaOpenAI" }]
+keywords = ["speech-recognition", "twi", "akan", "ghana", "low-resource", "phoneme"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Intended Audience :: Science/Research",
+]
+
+# Inference only. Training additionally needs the `train` extra.
+dependencies = [
+  "numpy<2",
+  "torch>=2.4",
+  "torchaudio>=2.4",
+  "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+# Reading HF datasets directly (pico hf-dataset, pico text-to-units --hf-dataset)
+datasets = ["datasets>=2.19", "huggingface_hub>=0.25"]
+# Browser UI
+web = ["gradio>=4.0"]
+# Building a feature store and training
+train = [
+  "datasets>=2.19",
+  "huggingface_hub>=0.25",
+  "pyarrow>=15",
+  "transformers>=4.44,<5",
+  "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
+]
+# Running training on Modal
+modal = ["modal>=1.0"]
+dev = ["pytest>=7", "ruff"]
+all = ["ghana-pico-asr[datasets,web,train,modal,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/ghanaopenai/ghana-pico-asr"
+Issues = "https://github.com/ghanaopenai/ghana-pico-asr/issues"
+
+[project.scripts]
+pico = "ghana_pico_asr.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["ghana_pico_asr*"]
+
+[tool.setuptools.package-data]
+# The bundled real (units, text) pairs, so `pico finetune-data` needs no audio.
+ghana_pico_asr = ["data/*.csv"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

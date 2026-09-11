@@ -1,0 +1,169 @@
+{
+  "n_shards": 313,
+  "n_utts": 294005,
+  "n_chunks": 5671770,
+  "audio_hours": 805.04,
+  "frames_labelled_pct": 59.89,
+  "n_classes": 37,
+  "labelled_frames_in_chunks": 340312791,
+  "index_stats": {
+    "short_gap_frames_ignored": 27105576,
+    "sil_frames": 57283159,
+    "loud_gap_frames_ignored": 66368676,
+    "utts": 294005,
+    "chunks": 5671770,
+    "labelled_frames": 173562329,
+    "frames": 289812707,
+    "utt_low_score": 16488
+  },
+  "class_distribution": {
+    "<sil>": {
+      "frames": 110994326,
+      "pct": 32.615
+    },
+    "a": {
+      "frames": 38656148,
+      "pct": 11.359
+    },
+    "n": {
+      "frames": 19853420,
+      "pct": 5.834
+    },
+    "e": {
+      "frames": 19474090,
+      "pct": 5.722
+    },
+    "ɛ": {
+      "frames": 18951749,
+      "pct": 5.569
+    },
+    "o": {
+      "frames": 17371729,
+      "pct": 5.105
+    },
+    "i": {
+      "frames": 13435859,
+      "pct": 3.948
+    },
+    "s": {
+      "frames": 13141566,
+      "pct": 3.862
+    },
+    "m": {
+      "frames": 11788321,
+      "pct": 3.464
+    },
+    "t": {
+      "frames": 8342647,
+      "pct": 2.451
+    },
+    "ɔ": {
+      "frames": 8107300,
+      "pct": 2.382
+    },
+    "b": {
+      "frames": 7194093,
+      "pct": 2.114
+    },
+    "k": {
+      "frames": 6519812,
+      "pct": 1.916
+    },
+    "d": {
+      "frames": 5936480,
+      "pct": 1.744
+    },
+    "u": {
+      "frames": 5717741,
+      "pct": 1.68
+    },
+    "r": {
+      "frames": 5360680,
+      "pct": 1.575
+    },
+    "f": {
+      "frames": 4207340,
+      "pct": 1.236
+    },
+    "y": {
+      "frames": 4056467,
+      "pct": 1.192
+    },
+    "p": {
+      "frames": 3440576,
+      "pct": 1.011
+    },
+    "h": {
+      "frames": 3226378,
+      "pct": 0.948
+    },
+    "w": {
+      "frames": 3201290,
+      "pct": 0.941
+    },
+    "ny": {
+      "frames": 2168814,
+      "pct": 0.637
+    },
+    "l": {
+      "frames": 1808594,
+      "pct": 0.531
+    },
+    "ky": {
+      "frames": 1142176,
+      "pct": 0.336
+    },
+    "c": {
+      "frames": 865226,
+      "pct": 0.254
+    },
+    "g": {
+      "frames": 840387,
+      "pct": 0.247
+    },
+    "hw": {
+      "frames": 751281,
+      "pct": 0.221
+    },
+    "kw": {
+      "frames": 581954,
+      "pct": 0.171
+    },
+    "gy": {
+      "frames": 567662,
+      "pct": 0.167
+    },
+    "v": {
+      "frames": 553332,
+      "pct": 0.163
+    },
+    "dw": {
+      "frames": 542758,
+      "pct": 0.159
+    },
+    "tw": {
+      "frames": 529995,
+      "pct": 0.156
+    },
+    "hy": {
+      "frames": 524365,
+      "pct": 0.154
+    },
+    "nw": {
+      "frames": 190783,
+      "pct": 0.056
+    },
+    "j": {
+      "frames": 101361,
+      "pct": 0.03
+    },
+    "x": {
+      "frames": 93121,
+      "pct": 0.027
+    },
+    "z": {
+      "frames": 72970,
+      "pct": 0.021
+    }
+  }
+}
