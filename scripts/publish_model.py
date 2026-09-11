@@ -57,7 +57,7 @@ step:
 ```bash
 pico transcribe speech.wav                  # single file
 pico hf-dataset org/dataset --limit 100     # straight from a HF dataset
-pico webui                                  # browser UI
+pico web                                    # browser UI
 ```
 
 ```python
