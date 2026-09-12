@@ -172,3 +172,20 @@ def test_scorer_makes_the_language_token_optional():
     from ghana_pico_asr.recovery.evaluate import score_model
 
     assert inspect.signature(score_model).parameters["lang_code"].annotation == "str | None"
+
+
+def test_baseline_excludes_the_task_prefix():
+    """The do-nothing baseline must score units alone.
+
+    Counting `restore twi: ` as errors inflated the T5 family's baseline to
+    0.588 against NLLB's 0.391 on identical data, making the families
+    incomparable on the one number the comparison turns on.
+    """
+    import io as _io
+
+    from ghana_pico_asr.recovery.evaluate import score_model
+
+    src = _io.open("ghana_pico_asr/recovery/evaluate.py", encoding="utf-8").read()
+    assert 'r.get("raw_source") or r["source_text"]' in src
+    job = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    assert 'r["raw_source"] = r["source_text"]' in job

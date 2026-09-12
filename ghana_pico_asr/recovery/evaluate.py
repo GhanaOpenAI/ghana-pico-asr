@@ -66,7 +66,9 @@ def score_model(
         hyps.extend(tok.batch_decode(out, skip_special_tokens=True))
 
     refs = [r["target_text"] for r in rows]
-    srcs = [r["source_text"] for r in rows]
+    # `raw_source` when a task prefix was added, so the do-nothing baseline
+    # measures the units alone rather than the units plus an instruction.
+    srcs = [r.get("raw_source") or r["source_text"] for r in rows]
     n = max(len(rows), 1)
     return {
         "n": len(rows),
@@ -74,6 +76,78 @@ def score_model(
         "wer": sum(wer(h, r) for h, r in zip(hyps, refs)) / n,
         "exact_match": sum(h.strip() == r.strip() for h, r in zip(hyps, refs)) / n,
         # What the raw units already score, before the model does anything.
+        # Comparable across model families because the prefix is excluded.
+        "baseline_cer": sum(cer(s, r) for s, r in zip(srcs, refs)) / n,
+        "samples": [
+            {"src": s[:80], "hyp": h[:80], "ref": r[:80]}
+            for s, h, r in list(zip(srcs, hyps, refs))[:5]
+        ],
+    }
+
+
+@torch.no_grad()
+def score_causal(
+    model,
+    tok,
+    rows: list[dict],
+    lang_code: str | None = None,
+    batch_size: int = 8,
+    max_source_len: int = 192,
+    max_target_len: int = 256,
+    num_beams: int = 1,
+) -> dict:
+    """Same metrics as `score_model`, for a decoder-only model.
+
+    A causal model continues the prompt rather than emitting a separate
+    sequence, so generation has to be left-padded — right padding would put pad
+    tokens between the prompt and the model's first real token — and the prompt
+    stripped back off what comes out.
+    """
+    from .causal import PROMPT, strip_prompt
+
+    was_training = model.training
+    model.eval()
+    device = next(model.parameters()).device
+
+    side = tok.padding_side
+    tok.padding_side = "left"
+    try:
+        hyps: list[str] = []
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            prompts = [
+                PROMPT.format(src=r.get("raw_source") or r["source_text"])
+                for r in chunk
+            ]
+            enc = tok(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_source_len + 16,
+            ).to(device)
+            out = model.generate(
+                **enc,
+                max_new_tokens=max_target_len,
+                num_beams=num_beams,
+                pad_token_id=tok.pad_token_id,
+            )
+            # Only the continuation: the prompt is echoed back in `out`.
+            gen = out[:, enc["input_ids"].shape[1]:]
+            hyps.extend(strip_prompt(x) for x in tok.batch_decode(gen, skip_special_tokens=True))
+    finally:
+        tok.padding_side = side
+        if was_training:
+            model.train()
+
+    refs = [r["target_text"] for r in rows]
+    srcs = [r.get("raw_source") or r["source_text"] for r in rows]
+    n = max(len(rows), 1)
+    return {
+        "n": len(rows),
+        "cer": sum(cer(h, r) for h, r in zip(hyps, refs)) / n,
+        "wer": sum(wer(h, r) for h, r in zip(hyps, refs)) / n,
+        "exact_match": sum(h.strip() == r.strip() for h, r in zip(hyps, refs)) / n,
         "baseline_cer": sum(cer(s, r) for s, r in zip(srcs, refs)) / n,
         "samples": [
             {"src": s[:80], "hyp": h[:80], "ref": r[:80]}

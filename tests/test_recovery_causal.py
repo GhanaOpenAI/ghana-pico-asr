@@ -67,3 +67,48 @@ def test_truncation_keeps_the_prompt_marker():
     assert tok.decode(prompt_ids).endswith("Twi text:")
     kept = [l for l in ex["labels"] if l != IGNORE]
     assert len(kept) == 21          # 20 target + EOS
+
+
+def test_causal_scoring_left_pads_and_strips_the_prompt():
+    """A decoder-only model continues its prompt.
+
+    Right padding would insert pad tokens between the prompt and the first
+    generated token, and the prompt is echoed back in the output, so it has to
+    be sliced off before scoring.
+    """
+    import inspect
+
+    from ghana_pico_asr.recovery.evaluate import score_causal
+
+    src = inspect.getsource(score_causal)
+    assert 'tok.padding_side = "left"' in src
+    assert 'enc["input_ids"].shape[1]' in src      # slices off the echoed prompt
+    assert "strip_prompt" in src
+    # Padding side is restored even if generation raises.
+    assert "finally:" in src
+
+
+def test_causal_and_seq2seq_scorers_report_the_same_keys():
+    """The comparison table only works if both paths report the same metrics."""
+    import inspect
+
+    from ghana_pico_asr.recovery.evaluate import score_causal, score_model
+
+    keys = lambda f: set(  # noqa: E731
+        m.group(1) for m in __import__("re").finditer(r'"(\w+)":', inspect.getsource(f))
+    )
+    for k in ("n", "cer", "wer", "exact_match", "baseline_cer", "samples"):
+        assert k in keys(score_model) and k in keys(score_causal), k
+
+
+def test_causal_models_get_no_extra_task_prefix():
+    """`causal.PROMPT` already carries the instruction.
+
+    Adding the T5 prefix on top desyncs training from inference: training
+    would see "Twi units: restore twi: ..." while `score_causal` rebuilds the
+    prompt from the unprefixed units.
+    """
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    assert '"" if (is_nllb or is_causal) else "restore twi: "' in src

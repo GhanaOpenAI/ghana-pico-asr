@@ -147,6 +147,8 @@ def main(argv=None) -> int:
         Seq2SeqTrainingArguments,
     )
 
+    from ghana_pico_asr.recovery.causal import build_example
+    from ghana_pico_asr.recovery.causal import collate as causal_collate
     from ghana_pico_asr.recovery.data import PairFilter, load_pairs, split_pairs
 
     print(f"[env] torch {torch.__version__} cuda={torch.cuda.is_available()}", flush=True)
@@ -248,12 +250,21 @@ def main(argv=None) -> int:
             if gc is not None:
                 gc.forced_bos_token_id = forced_bos
 
+    # No prefix for NLLB (its language codes say what to do) and none for a
+    # causal model (causal.PROMPT already wraps the units in an instruction).
+    # Adding one for causal would also desync training from inference, since
+    # the scorer rebuilds its prompt from the unprefixed units.
     prefix = args.task_prefix if args.task_prefix is not None else (
-        "" if is_nllb else "restore twi: "
+        "" if (is_nllb or is_causal) else "restore twi: "
     )
     if prefix:
         print(f"[model] task prefix {prefix!r}", flush=True)
         for r in splits["train"] + splits["val"] + splits["test"]:
+            # Keep the unprefixed units: `baseline_cer` scores the raw input
+            # against the reference, and counting the prefix as errors would
+            # hand the T5 family an inflated baseline and make the families
+            # incomparable.
+            r["raw_source"] = r["source_text"]
             r["source_text"] = prefix + r["source_text"]
 
     def encode(batch_rows):
@@ -280,7 +291,15 @@ def main(argv=None) -> int:
             return len(self.rows)
 
         def __getitem__(self, i):
-            enc = encode([self.rows[i]])
+            r = self.rows[i]
+            if is_causal:
+                # One stream, prompt masked out of the loss.
+                return build_example(
+                    tok, r["source_text"], r["target_text"],
+                    max_source_len=args.max_source_len,
+                    max_target_len=args.max_target_len,
+                )
+            enc = encode([r])
             return {k: v[0] for k, v in enc.items()}
 
     train_ds, val_ds = Pairs(splits["train"]), Pairs(splits["val"][: args.eval_n])
@@ -313,14 +332,19 @@ def main(argv=None) -> int:
         args=targs,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        data_collator=DataCollatorForSeq2Seq(tok, model=model),
+        data_collator=(
+            (lambda feats: causal_collate(feats, tok.pad_token_id))
+            if is_causal
+            else DataCollatorForSeq2Seq(tok, model=model)
+        ),
     )
     trainer.train()
 
     # ---- score on held-out pairs --------------------------------------- #
-    from ghana_pico_asr.recovery.evaluate import score_model
+    from ghana_pico_asr.recovery.evaluate import score_causal, score_model
 
-    metrics = score_model(
+    scorer = score_causal if is_causal else score_model
+    metrics = scorer(
         model, tok, splits["test"][: args.eval_n],
         args.lang_code if is_nllb else None,
         max_source_len=args.max_source_len, max_target_len=args.max_target_len,
