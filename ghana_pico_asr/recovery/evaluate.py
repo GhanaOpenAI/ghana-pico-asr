@@ -78,6 +78,15 @@ def score_model(
         # What the raw units already score, before the model does anything.
         # Comparable across model families because the prefix is excluded.
         "baseline_cer": sum(cer(s, r) for s, r in zip(srcs, refs)) / n,
+        # Generated characters / reference characters. A CER above 1 is almost
+        # always runaway generation rather than wrong words, and without this
+        # the two are indistinguishable in a log: gemma scored 2.50 with
+        # samples that looked the right length, because samples are truncated.
+        # Stage 1 reports the same ratio for the same reason.
+        "length_ratio": sum(len(h) for h in hyps) / max(sum(len(r) for r in refs), 1),
+        "max_length_ratio": max(
+            (len(h) / max(len(r), 1) for h, r in zip(hyps, refs)), default=0.0
+        ),
         "samples": [
             {"src": s[:80], "hyp": h[:80], "ref": r[:80]}
             for s, h, r in list(zip(srcs, hyps, refs))[:5]
@@ -155,6 +164,15 @@ def score_causal(
         "wer": sum(wer(h, r) for h, r in zip(hyps, refs)) / n,
         "exact_match": sum(h.strip() == r.strip() for h, r in zip(hyps, refs)) / n,
         "baseline_cer": sum(cer(s, r) for s, r in zip(srcs, refs)) / n,
+        # Generated characters / reference characters. A CER above 1 is almost
+        # always runaway generation rather than wrong words, and without this
+        # the two are indistinguishable in a log: gemma scored 2.50 with
+        # samples that looked the right length, because samples are truncated.
+        # Stage 1 reports the same ratio for the same reason.
+        "length_ratio": sum(len(h) for h in hyps) / max(sum(len(r) for r in refs), 1),
+        "max_length_ratio": max(
+            (len(h) / max(len(r), 1) for h, r in zip(hyps, refs)), default=0.0
+        ),
         "samples": [
             {"src": s[:80], "hyp": h[:80], "ref": r[:80]}
             for s, h, r in list(zip(srcs, hyps, refs))[:5]

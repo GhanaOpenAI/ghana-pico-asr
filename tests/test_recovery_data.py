@@ -357,3 +357,20 @@ def test_eval_only_resizes_the_base_model_too():
     assert "base.resize_token_embeddings(len(tok))" in branch
     # And before the adapter is attached, not after.
     assert branch.index("resize_token_embeddings") < branch.index("PeftModel.from_pretrained")
+
+
+def test_scorers_report_length_ratio():
+    """A CER above 1 is almost always runaway generation, not wrong words.
+
+    Gemma scored 2.50 with samples that looked the right length — because
+    samples are truncated to 80 characters in the log, so the two cases were
+    indistinguishable. Stage 1 reports the same ratio for the same reason.
+    """
+    import inspect
+
+    from ghana_pico_asr.recovery.evaluate import score_causal, score_model
+
+    for f in (score_model, score_causal):
+        src = inspect.getsource(f)
+        assert '"length_ratio"' in src, f.__name__
+        assert '"max_length_ratio"' in src, f.__name__
