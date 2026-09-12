@@ -36,7 +36,7 @@ def score_model(
     model,
     tok,
     rows: list[dict],
-    lang_code: str,
+    lang_code: str | None,
     batch_size: int = 16,
     max_source_len: int = 192,
     max_target_len: int = 160,
@@ -46,7 +46,8 @@ def score_model(
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
-    forced_bos = tok.convert_tokens_to_ids(lang_code)
+    # None for the T5 family, which has no language token to open with.
+    forced_bos = tok.convert_tokens_to_ids(lang_code) if lang_code else None
 
     hyps: list[str] = []
     for i in range(0, len(rows), batch_size):
@@ -58,12 +59,10 @@ def score_model(
             truncation=True,
             max_length=max_source_len,
         ).to(device)
-        out = model.generate(
-            **enc,
-            forced_bos_token_id=forced_bos,
-            max_new_tokens=max_target_len,
-            num_beams=num_beams,
-        )
+        gen_kw = {"max_new_tokens": max_target_len, "num_beams": num_beams}
+        if forced_bos is not None:
+            gen_kw["forced_bos_token_id"] = forced_bos
+        out = model.generate(**enc, **gen_kw)
         hyps.extend(tok.batch_decode(out, skip_special_tokens=True))
 
     refs = [r["target_text"] for r in rows]

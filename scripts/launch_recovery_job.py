@@ -27,8 +27,13 @@ RUNS_FILE = os.path.join(HERE, ".hf_jobs.json")
 
 DEFAULT_NAMESPACE = "ghananlpcommunity"
 DEFAULT_BUCKET = "ghananlpcommunity/pico-asr-runs"
-# Torch, transformers, peft and accelerate preinstalled; the job adds nothing.
-DEFAULT_IMAGE = "huggingface/transformers-pytorch-gpu:latest"
+# Torch 2.10 to match the pinned peft/transformers, not stage 1's 2.5.1:
+# peft 0.19 reaches for `torch.float8_e8m0fnu`, which 2.5.1 does not have.
+# Pinning libraries without pinning the runtime underneath them is only half a
+# pin. `huggingface/transformers-pytorch-gpu` was the other candidate and ships
+# transformers already, but has no `python` on PATH — only `python3` — so the
+# container never starts.
+DEFAULT_IMAGE = "pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime"
 
 
 def _stage_code() -> str:
@@ -124,11 +129,11 @@ def main(argv=None) -> int:
         "-e", "HF_HUB_ENABLE_HF_TRANSFER=1",
         "-e", "PYTHONUNBUFFERED=1",
         args.image,
-        "sh", "-lc",
-        # Quoted: unquoted `peft>=0.11` is a shell redirection, which silently
-        # installs the wrong thing and writes a file named "=0.11".
-        "pip install -q 'peft>=0.11' sentencepiece && "
-        "python /code/job/hf_recovery.py " + " ".join(train_args),
+        # A plain argv, no shell: the entrypoint installs what the image lacks
+        # itself. Routing `pip install ... && python ...` through `sh -c` puts
+        # the command through two layers of quoting, where `peft>=0.11` reads
+        # as a redirection and the command string can be taken for a filename.
+        "python", "/code/job/hf_recovery.py", *train_args,
     ]
 
     if args.dry_run:

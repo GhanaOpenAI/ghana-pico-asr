@@ -95,6 +95,40 @@ def split_pairs(rows: list[dict], val_pct: int = 2, test_pct: int = 2) -> dict:
     return out
 
 
+def _uer_column(rows: list[dict], cache_dir: str | None, key: str) -> list[float]:
+    """Per-pair UER for every row, cached.
+
+    Scoring 282k pairs by edit distance takes ~12 minutes, and it is the same
+    answer every run — including for a 4k smoke run that then throws almost all
+    of it away. Cached beside the checkpoints so only the first run pays.
+    """
+    import json
+    import os
+
+    path = os.path.join(cache_dir, f"uer_{key}.json") if cache_dir else None
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                cached = json.load(fh)
+            if len(cached) == len(rows):
+                return cached
+        except Exception:  # noqa: BLE001 - a bad cache must not block a run
+            pass
+
+    out = [
+        pair_uer(r["units"], r["reference_units"]) if r.get("reference_units") else 0.0
+        for r in rows
+    ]
+    if path:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(out, fh)
+        except OSError:
+            pass
+    return out
+
+
 def load_pairs(
     repo_id: str | None = None,
     language: str = "twi",
@@ -102,6 +136,7 @@ def load_pairs(
     limit: int = 0,
     spaced: bool = False,
     seed: int = 0,
+    cache_dir: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Load, filter and balance the published pairs.
 
@@ -127,8 +162,14 @@ def load_pairs(
     rows = table.to_pylist()
     report = {"repo": repo_id, "loaded": len(rows)}
 
+    uers = (
+        _uer_column(rows, cache_dir, f"{repo_id.replace('/', '_')}_{len(rows)}")
+        if flt.max_uer < 1.0
+        else [0.0] * len(rows)
+    )
+
     kept, drop_short, drop_uer, drop_src = [], 0, 0, 0
-    for r in rows:
+    for r, u in zip(rows, uers):
         if r.get("source") in flt.exclude_sources:
             drop_src += 1
             continue
@@ -137,7 +178,6 @@ def load_pairs(
             drop_short += 1
             continue
         if flt.max_uer < 1.0 and r.get("reference_units"):
-            u = pair_uer(r["units"], r["reference_units"])
             if u > flt.max_uer:
                 drop_uer += 1
                 continue

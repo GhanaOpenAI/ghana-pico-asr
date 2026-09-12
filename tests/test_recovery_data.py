@@ -93,3 +93,82 @@ def test_evaluation_reports_the_do_nothing_baseline():
     src = _i.getsource(evaluate.score_model)
     assert '"baseline_cer"' in src
     assert "exact_match" in src
+
+
+def test_uer_column_is_cached_between_runs(tmp_path):
+    """Scoring 282k pairs takes ~12 min and gives the same answer every time.
+
+    A smoke run that keeps 4k pairs would otherwise pay it in full.
+    """
+    from ghana_pico_asr.recovery.data import _uer_column
+
+    rows = [{"units": "a b c", "reference_units": "a b d"} for _ in range(5)]
+    first = _uer_column(rows, str(tmp_path), "k")
+    assert first == [pytest.approx(1 / 3)] * 5
+    assert (tmp_path / "uer_k.json").exists()
+
+    # A cache of the wrong length is ignored rather than trusted.
+    stale = [{"units": "x", "reference_units": "x"}] * 3
+    assert len(_uer_column(stale, str(tmp_path), "k")) == 3
+
+    # No cache dir still works.
+    assert _uer_column(rows, None, "k") == first
+
+
+def test_safetensors_is_required_for_the_base_model():
+    """transformers 5.x refuses torch.load on torch < 2.6 (CVE-2025-32434),
+    and NLLB ships both a .bin and safetensors."""
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    assert "use_safetensors=True" in src
+
+
+def test_training_arguments_are_valid_for_the_pinned_transformers():
+    """Every kwarg the job passes must exist in the pinned transformers.
+
+    `transformers>=4.44` floated to a release that had dropped `warmup_ratio`,
+    failing a run that had worked hours earlier. Pins fix the drift; this
+    catches a bad kwarg before a job is scheduled.
+    """
+    import inspect
+    import io as _io
+    import re
+
+    from transformers import Seq2SeqTrainingArguments
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    block = src[src.index("targs = Seq2SeqTrainingArguments("):src.index("trainer = Seq2SeqTrainer(")]
+    used = re.findall(r"^\s{8}(\w+)=", block, re.M)
+    sig = set(inspect.signature(Seq2SeqTrainingArguments.__init__).parameters)
+    assert used, "no kwargs found — the parser needs updating"
+    assert [k for k in used if k not in sig] == []
+
+
+def test_trainer_supports_both_model_families():
+    """NLLB conditions on language codes; the T5 family has none.
+
+    Vanilla t5-base is excluded on purpose: its tokeniser drops ɛ and ɔ
+    entirely (`Ɔyɛ ne ho` -> `y ne ho`), destroying the phonemic contrasts the
+    grapheme-unit inventory exists to carry. mT5 and ByT5 round-trip losslessly
+    and need no vocabulary surgery.
+    """
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    # Family detected from the tokeniser, not hardcoded from the model name.
+    assert "is_nllb = args.lang_code in probe.get_vocab()" in src
+    # T5 gets a task prefix in place of language conditioning.
+    assert "restore twi: " in src
+    # A forced BOS is NLLB-only.
+    assert "forced_bos = tok.convert_tokens_to_ids(args.lang_code) if is_nllb else None" in src
+    # LoRA targets the right layer names per family.
+    assert '"wi_0", "wi_1", "wo"' in src
+
+
+def test_scorer_makes_the_language_token_optional():
+    import inspect
+
+    from ghana_pico_asr.recovery.evaluate import score_model
+
+    assert inspect.signature(score_model).parameters["lang_code"].annotation == "str | None"

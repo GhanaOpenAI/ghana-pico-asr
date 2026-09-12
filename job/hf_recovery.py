@@ -56,13 +56,79 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--pairs-repo", default=None)
 
     ap.add_argument("--eval-n", type=int, default=1000)
+    ap.add_argument("--task-prefix", default=None,
+                    help="prepended to every input; defaults to '' for NLLB and "
+                         "'restore twi: ' for the T5 family, which has no "
+                         "language conditioning to tell it what to do")
     ap.add_argument("--push-to", default=None, help="HF model repo to publish to")
     return ap
+
+
+#: Pinned, not floored. `transformers>=4.44` resolves to whatever is newest at
+#: job time, and a release that drops a Trainer argument then fails a run that
+#: worked yesterday — which is how `warmup_ratio` disappeared mid-session.
+#: These are the versions the code is verified against locally.
+#:
+#: The runtime is pinned too, by image tag: these versions need torch >= 2.7
+#: (peft reaches for `torch.float8_e8m0fnu`), so the launcher asks for a
+#: torch-2.10 image. Pinning libraries onto an unpinned runtime is half a pin.
+DEPS = (
+    "transformers==5.7.0",
+    "peft==0.19.0",
+    "accelerate==1.12.0",
+    "sentencepiece==0.2.0",
+    "pyarrow==23.0.1",
+    "numpy==1.26.4",
+    "huggingface_hub==1.23.0",
+)
+
+
+def ensure_deps(packages: tuple[str, ...] = DEPS) -> None:
+    """Install the pinned dependency set.
+
+    Always invoked rather than skipped when the imports happen to resolve: an
+    image that already carries a different version of transformers would
+    otherwise be used silently, and the whole point of pinning is that the job
+    runs the versions the code was tested against. pip is a no-op in seconds
+    when the pins are already satisfied.
+
+    Doing this from inside Python rather than as `sh -c "pip install ... && python ..."`
+    keeps the job command a plain argv, with no shell quoting to get wrong.
+    """
+    import subprocess
+
+    print(f"[deps] ensuring {len(packages)} pinned packages", flush=True)
+    # --break-system-packages: newer base images mark their Python as
+    # externally managed (PEP 668) and pip refuses to touch it. The container
+    # is disposable, so there is no system to protect.
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--break-system-packages", *packages],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        # Printed rather than swallowed: `pip install -q` hid an
+        # externally-managed-environment error behind a bare CalledProcessError,
+        # which cost a scheduling round trip to diagnose.
+        print(proc.stdout[-4000:], flush=True)
+        print(proc.stderr[-4000:], flush=True)
+        raise SystemExit(f"[deps] pip failed with status {proc.returncode}")
+    import importlib.metadata as md
+
+    print(
+        "[deps] "
+        + " ".join(
+            f"{p.split('==')[0]}={md.version(p.split('==')[0].replace('_', '-'))}"
+            for p in packages
+        ),
+        flush=True,
+    )
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ensure_deps()
 
     import numpy as np
     import torch
@@ -92,17 +158,34 @@ def main(argv=None) -> int:
         ),
         limit=args.limit,
         spaced=args.spaced_input,
+        cache_dir=os.path.join(WORK, "recovery", "cache"),
     )
     splits = split_pairs(rows)
     report["splits"] = {k: len(v) for k, v in splits.items()}
     print(f"[data] {json.dumps(report)} in {time.time() - t0:.0f}s", flush=True)
 
     # ---- model --------------------------------------------------------- #
-    tok = AutoTokenizer.from_pretrained(
-        args.base_model, src_lang=args.lang_code, tgt_lang=args.lang_code
+    # NLLB conditions on language codes; the T5 family has none and uses a
+    # task prefix instead. Detected from the tokeniser rather than the model
+    # name, so a new checkpoint of either family just works.
+    probe = AutoTokenizer.from_pretrained(args.base_model)
+    is_nllb = args.lang_code in probe.get_vocab()
+    tok = (
+        AutoTokenizer.from_pretrained(
+            args.base_model, src_lang=args.lang_code, tgt_lang=args.lang_code
+        )
+        if is_nllb
+        else probe
     )
+    print(f"[model] {args.base_model} family={'nllb' if is_nllb else 't5'}", flush=True)
+    # use_safetensors: NLLB ships both pytorch_model.bin and model.safetensors,
+    # and transformers 5.x refuses to torch.load a .bin on torch < 2.6
+    # (CVE-2025-32434). Asking for safetensors sidesteps the version floor
+    # instead of pinning the image to a newer torch than stage 1 runs on.
     model = AutoModelForSeq2SeqLM.from_pretrained(
-        args.base_model, dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        args.base_model,
+        dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        use_safetensors=True,
     )
 
     if not args.full_finetune:
@@ -117,7 +200,13 @@ def main(argv=None) -> int:
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type="SEQ_2_SEQ_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"],
+            # Every linear layer in either family's blocks; the two use
+            # different names for the same places.
+            target_modules=(
+                ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
+                if is_nllb
+                else ["q", "k", "v", "o", "wi", "wi_0", "wi_1", "wo"]
+            ),
         )
         model = get_peft_model(model, cfg)
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -126,10 +215,24 @@ def main(argv=None) -> int:
               f"trainable {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)",
               flush=True)
 
-    forced_bos = tok.convert_tokens_to_ids(args.lang_code)
-    model.config.forced_bos_token_id = forced_bos
-    if hasattr(model, "generation_config"):
-        model.generation_config.forced_bos_token_id = forced_bos
+    # The target language token NLLB must open every generation with. It goes
+    # on `generation_config` only: transformers 5.x rejects generation settings
+    # left on `model.config`, treating them as a modified pretrained config.
+    # T5 has no such token and must not have one forced.
+    forced_bos = tok.convert_tokens_to_ids(args.lang_code) if is_nllb else None
+    if forced_bos is not None:
+        for owner in (model, getattr(model, "base_model", None)):
+            gc = getattr(owner, "generation_config", None)
+            if gc is not None:
+                gc.forced_bos_token_id = forced_bos
+
+    prefix = args.task_prefix if args.task_prefix is not None else (
+        "" if is_nllb else "restore twi: "
+    )
+    if prefix:
+        print(f"[model] task prefix {prefix!r}", flush=True)
+        for r in splits["train"] + splits["val"] + splits["test"]:
+            r["source_text"] = prefix + r["source_text"]
 
     def encode(batch_rows):
         model_inputs = tok(
@@ -196,7 +299,8 @@ def main(argv=None) -> int:
     from ghana_pico_asr.recovery.evaluate import score_model
 
     metrics = score_model(
-        model, tok, splits["test"][: args.eval_n], args.lang_code,
+        model, tok, splits["test"][: args.eval_n],
+        args.lang_code if is_nllb else None,
         max_source_len=args.max_source_len, max_target_len=args.max_target_len,
     )
     print(f"[test] {json.dumps(metrics)}", flush=True)
