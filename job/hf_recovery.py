@@ -80,6 +80,11 @@ DEPS = (
     "pyarrow==23.0.1",
     "numpy==1.26.4",
     "huggingface_hub==1.23.0",
+    # mT5's tokeniser is stored as a tiktoken file in transformers 5.x, and
+    # protobuf is needed to convert sentencepiece models. Neither is pulled in
+    # by transformers itself.
+    "tiktoken==0.9.0",
+    "protobuf==6.33.5",
 )
 
 
@@ -133,6 +138,8 @@ def main(argv=None) -> int:
     import numpy as np
     import torch
     from transformers import (
+        AutoConfig,
+        AutoModelForCausalLM,
         AutoModelForSeq2SeqLM,
         AutoTokenizer,
         DataCollatorForSeq2Seq,
@@ -170,6 +177,12 @@ def main(argv=None) -> int:
     # name, so a new checkpoint of either family just works.
     probe = AutoTokenizer.from_pretrained(args.base_model)
     is_nllb = args.lang_code in probe.get_vocab()
+    # Encoder-decoder or decoder-only, read from the config rather than the
+    # model name: the two need different data layout, loss masking, LoRA
+    # targets and generation.
+    is_causal = not getattr(
+        AutoConfig.from_pretrained(args.base_model), "is_encoder_decoder", False
+    )
     tok = (
         AutoTokenizer.from_pretrained(
             args.base_model, src_lang=args.lang_code, tgt_lang=args.lang_code
@@ -177,12 +190,18 @@ def main(argv=None) -> int:
         if is_nllb
         else probe
     )
-    print(f"[model] {args.base_model} family={'nllb' if is_nllb else 't5'}", flush=True)
+    family = "nllb" if is_nllb else ("causal" if is_causal else "t5")
+    print(f"[model] {args.base_model} family={family}", flush=True)
+    if is_causal and probe.pad_token_id is None:
+        # Qwen ships no pad token; padding with EOS is standard, and the
+        # attention mask keeps it out of the computation either way.
+        probe.pad_token = probe.eos_token
     # use_safetensors: NLLB ships both pytorch_model.bin and model.safetensors,
     # and transformers 5.x refuses to torch.load a .bin on torch < 2.6
     # (CVE-2025-32434). Asking for safetensors sidesteps the version floor
     # instead of pinning the image to a newer torch than stage 1 runs on.
-    model = AutoModelForSeq2SeqLM.from_pretrained(
+    loader = AutoModelForCausalLM if is_causal else AutoModelForSeq2SeqLM
+    model = loader.from_pretrained(
         args.base_model,
         dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
         use_safetensors=True,
@@ -199,11 +218,14 @@ def main(argv=None) -> int:
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
             bias="none",
-            task_type="SEQ_2_SEQ_LM",
+            task_type="CAUSAL_LM" if is_causal else "SEQ_2_SEQ_LM",
             # Every linear layer in either family's blocks; the two use
             # different names for the same places.
             target_modules=(
-                ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
+                ["q_proj", "k_proj", "v_proj", "o_proj",
+                 "gate_proj", "up_proj", "down_proj"]
+                if is_causal
+                else ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
                 if is_nllb
                 else ["q", "k", "v", "o", "wi", "wi_0", "wi_1", "wo"]
             ),
