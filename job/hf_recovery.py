@@ -51,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-uer", type=float, default=0.5)
     ap.add_argument("--machine-ratio", type=float, default=0.5)
     ap.add_argument("--min-units", type=int, default=8)
+    ap.add_argument("--extend-tokenizer", action="store_true",
+                    help="add any Twi characters the tokeniser cannot represent, "
+                         "and train the resized embeddings alongside the adapters")
+    ap.add_argument("--clean-text-repo", default=None,
+                    help="HF text dataset for clean pairs; empty string reuses "
+                         "the training pairs' own reference_units instead")
     ap.add_argument("--clean-ratio", type=float, default=0.0,
                     help="extra pairs built from reference_units, as a fraction "
                          "of the real pairs. Teaches restoration without errors "
@@ -178,6 +184,8 @@ def main(argv=None) -> int:
             min_units=args.min_units,
             machine_ratio=args.machine_ratio,
             clean_ratio=args.clean_ratio,
+            **({} if args.clean_text_repo is None
+               else {'clean_text_repo': args.clean_text_repo or None}),
         ),
         limit=args.limit,
         spaced=args.spaced_input,
@@ -230,12 +238,31 @@ def main(argv=None) -> int:
     # and transformers 5.x refuses to torch.load a .bin on torch < 2.6
     # (CVE-2025-32434). Asking for safetensors sidesteps the version floor
     # instead of pinning the image to a newer torch than stage 1 runs on.
+    # Some tokenisers cannot represent Twi at all: t5 emits UNK for Ɔ Ɛ ɔ ɛ and
+    # round-trips "Ɔyɛ ne ho" to "y ne ho", silently deleting the two vowels the
+    # grapheme inventory exists to carry. Adding them is four tokens.
+    added = 0
+    if args.extend_tokenizer:
+        alphabet = set("abcdefghijklmnopqrstuvwxyzɛɔ")
+        alphabet |= {c.upper() for c in alphabet}
+        missing = sorted(
+            c for c in alphabet
+            if tok.unk_token_id is not None
+            and tok.unk_token_id in tok(c, add_special_tokens=False)["input_ids"]
+        )
+        if missing:
+            added = tok.add_tokens(missing)
+            print(f"[tok] added {added} tokens: {' '.join(missing)}", flush=True)
+
     loader = AutoModelForCausalLM if is_causal else AutoModelForSeq2SeqLM
     model = loader.from_pretrained(
         args.base_model,
         dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
         use_safetensors=True,
     )
+
+    if added:
+        model.resize_token_embeddings(len(tok))
 
     if not args.full_finetune:
         from peft import LoraConfig, get_peft_model
@@ -249,6 +276,12 @@ def main(argv=None) -> int:
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM" if is_causal else "SEQ_2_SEQ_LM",
+            # Newly added tokens start with random embeddings, and LoRA does
+            # not touch the embedding matrix — so without this they would stay
+            # random for the whole run and the model could never read or write
+            # ɛ and ɔ. Saving the embedding layer costs memory; not saving it
+            # makes the extension pointless.
+            modules_to_save=(["shared", "lm_head"] if added else None),
             # Every linear layer in either family's blocks; the two use
             # different names for the same places.
             target_modules=(
@@ -400,8 +433,17 @@ def main(argv=None) -> int:
     if not args.eval_only:
         model.save_pretrained(os.path.join(out_dir, "final"))
         tok.save_pretrained(os.path.join(out_dir, "final"))
-    with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as fh:
-        json.dump({"data": report, "test": metrics, "args": vars(args)}, fh, indent=2)
+    # Re-created immediately before the write: the bucket mount is object
+    # storage, where a directory containing no files does not reliably persist
+    # between its creation and a later open(). Losing a completed evaluation to
+    # that would be absurd, so the result is also printed above regardless.
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as fh:
+            json.dump({"data": report, "test": metrics, "args": vars(args)}, fh, indent=2)
+    except OSError as exc:
+        print(f"[warn] could not write metrics.json ({exc}); "
+              "the [test] line above carries the same numbers", flush=True)
 
     if args.push_to:
         model.push_to_hub(args.push_to)

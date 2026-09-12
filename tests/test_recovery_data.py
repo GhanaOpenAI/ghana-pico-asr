@@ -224,3 +224,45 @@ def test_clean_augmentation_preserves_the_target():
     block = src[src.index("if flt.clean_ratio > 0:"):src.index('report["final"]')]
     assert "c = dict(r)" in block          # inherits target_text unchanged
     assert 'c["target_text"]' not in block  # and never overwrites it
+
+
+def test_a_completed_evaluation_survives_a_failed_metrics_write():
+    """The bucket is object storage: an empty directory does not reliably
+    persist between creation and a later open(). A finished evaluation must
+    not be lost to that — it cost GPU time to produce."""
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    block = src[src.index('metrics.json'):]
+    assert "except OSError" in src[src.index("os.makedirs(out_dir, exist_ok=True)\n        with open"):]
+    # And the numbers are printed before any write is attempted.
+    assert src.index('print(f"[test] ') < src.index('"metrics.json"), "w"')
+
+
+def test_tokenizer_extension_trains_the_new_embeddings():
+    """Adding tokens without training their embeddings is worse than useless.
+
+    t5 emits UNK for Ɔ Ɛ ɔ ɛ and round-trips "Ɔyɛ ne ho" to "y ne ho". Adding
+    the four characters resizes the embedding matrix, but LoRA does not touch
+    embeddings — so without `modules_to_save` the new rows stay at their random
+    initialisation for the entire run and the model can never read or write
+    those vowels.
+    """
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    assert "resize_token_embeddings(len(tok))" in src
+    assert 'modules_to_save=(["shared", "lm_head"] if added else None)' in src
+    # Resize must happen before the model is wrapped for LoRA.
+    assert src.index("resize_token_embeddings") < src.index("get_peft_model")
+
+
+def test_clean_text_source_is_a_different_register():
+    """Same-corpus clean pairs cannot fix a domain failure: their text
+    distribution is the one that failed to transfer."""
+    from ghana_pico_asr.recovery.data import CLEAN_TEXT_REPO, PairFilter
+
+    assert CLEAN_TEXT_REPO == "ghananlpcommunity/pristine-twi-english-parallel-sentences"
+    # Defaults to the external corpus, not reference_units.
+    assert PairFilter().clean_text_repo == CLEAN_TEXT_REPO
+    assert PairFilter().clean_ratio == 0.0   # still opt-in

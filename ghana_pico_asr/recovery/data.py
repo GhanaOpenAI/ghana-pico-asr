@@ -28,6 +28,15 @@ from dataclasses import dataclass, field
 
 from .. import config as C
 
+#: Clean Twi text for building error-free pairs. Its register — news and
+#: conversation — is deliberately unlike the training corpora (scripture, health
+#: talk shows, film dialogue), because the failure this addresses is domain, not
+#: noise: on held-out Waxal the recovery models reconstructed fluent sentences
+#: from the *training* distribution rather than the one they were given.
+CLEAN_TEXT_REPO = "ghananlpcommunity/pristine-twi-english-parallel-sentences"
+CLEAN_TEXT_COLUMN = "twi"
+
+
 #: Source ids whose reference text was written by a person. From
 #: `config.SOURCE_IDS`; ids 2 and 3 are machine transcripts.
 HUMAN_SOURCES = frozenset({1, 4, 5, 7})
@@ -69,6 +78,11 @@ class PairFilter:
     #: given — a better formatter and a worse corrector.
     clean_ratio: float = 0.0
 
+    #: Where clean pairs come from. A text dataset id builds them from raw
+    #: sentences; None reuses the training pairs' own `reference_units`, which
+    #: teaches the mapping but leaves the text distribution unchanged.
+    clean_text_repo: str | None = CLEAN_TEXT_REPO
+
 
 def pair_uer(units: str, reference_units: str) -> float:
     """Unit error rate of one pair against its own reference."""
@@ -83,6 +97,64 @@ def pair_uer(units: str, reference_units: str) -> float:
 def format_source(units: str, spaced: bool = False) -> str:
     """The encoder's input string for a unit sequence."""
     return units if spaced else units.replace(" ", "")
+
+
+def clean_pairs_from_text(
+    n: int,
+    language: str = "twi",
+    repo_id: str | None = None,
+    column: str | None = None,
+    spaced: bool = False,
+    min_units: int = 8,
+    seed: int = 0,
+) -> list[dict]:
+    """Build (units, text) pairs from raw text, with no recogniser involved.
+
+    `lang.segment` is deterministic, so any Twi text becomes a training pair
+    for free — no audio, no GPU. These carry no errors to correct, so they
+    teach restoration only: word boundaries, capitalisation, apostrophes and
+    punctuation. That is the domain-independent half of the job, and the half
+    that transferred worst.
+    """
+    import pyarrow.parquet as pq
+    from huggingface_hub import hf_hub_download
+
+    from ..languages import flatten, get_language
+
+    lang = get_language(language)
+    path = hf_hub_download(
+        repo_id or CLEAN_TEXT_REPO,
+        "data/train-00000-of-00006.parquet",
+        repo_type="dataset",
+    )
+    col = column or CLEAN_TEXT_COLUMN
+    out: list[dict] = []
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=2048, columns=[col]):
+        if len(out) >= n:
+            break
+        for text in batch.column(col).to_pylist():
+            if len(out) >= n:
+                break
+            text = (text or "").strip()
+            if not text:
+                continue
+            units = flatten(lang.segment(text))
+            if len(units) < min_units:
+                continue
+            out.append(
+                {
+                    "units": " ".join(units),
+                    "reference_units": " ".join(units),
+                    "text": text,
+                    "source_text": format_source(" ".join(units), spaced=spaced),
+                    "target_text": text,
+                    "origin": "clean-text",
+                    "source": -1,
+                    "uer": 0.0,
+                    "id": f"clean{len(out):07d}",
+                }
+            )
+    return out
 
 
 def _bucket(key: str) -> int:
@@ -221,7 +293,20 @@ def load_pairs(
         r["target_text"] = r["text"].strip()
         r["origin"] = "real"
 
-    if flt.clean_ratio > 0:
+    if flt.clean_ratio > 0 and flt.clean_text_repo:
+        # Clean pairs from *other* text: broadens the range of sentences the
+        # model has been asked to produce, which same-corpus clean pairs cannot
+        # do — their text distribution is the one that failed to transfer.
+        n_clean = int(len(kept) * flt.clean_ratio)
+        clean = clean_pairs_from_text(
+            n_clean, language=language, repo_id=flt.clean_text_repo, spaced=spaced,
+            min_units=flt.min_units, seed=seed,
+        )
+        kept = kept + clean
+        random.Random(seed + 1).shuffle(kept)
+        report["clean_added"] = len(clean)
+        report["clean_source"] = flt.clean_text_repo
+    elif flt.clean_ratio > 0:
         pool = [r for r in kept if (r.get("reference_units") or "").strip()]
         n_clean = int(len(kept) * flt.clean_ratio)
         rng = random.Random(seed + 1)

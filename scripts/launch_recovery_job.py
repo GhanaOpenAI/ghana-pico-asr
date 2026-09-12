@@ -77,6 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--full-finetune", action="store_true")
     ap.add_argument("--max-uer", type=float, default=0.5)
     ap.add_argument("--machine-ratio", type=float, default=0.5)
+    ap.add_argument("--clean-text-repo", default=None)
+    ap.add_argument("--extend-tokenizer", action="store_true")
     ap.add_argument("--clean-ratio", type=float, default=0.0,
                     help="add pairs built from reference_units at this fraction")
     ap.add_argument("--spaced-input", action="store_true")
@@ -133,6 +135,10 @@ def main(argv=None) -> int:
         train_args += ["--limit", "4000", "--eval-n", "200"]
     if args.push_to and not args.smoke:
         train_args += ["--push-to", args.push_to]
+    if args.extend_tokenizer:
+        train_args.append("--extend-tokenizer")
+    if args.clean_text_repo is not None:
+        train_args += ["--clean-text-repo", args.clean_text_repo]
     if args.eval_only:
         train_args += ["--eval-only", args.eval_only]
     if args.eval_pairs:
