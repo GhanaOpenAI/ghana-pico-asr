@@ -112,3 +112,20 @@ def test_causal_models_get_no_extra_task_prefix():
 
     src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
     assert '"" if (is_nllb or is_causal) else "restore twi: "' in src
+
+
+def test_generation_tokenisation_matches_training():
+    """`build_example` uses add_special_tokens=False, so generation must too.
+
+    Gemma prepends <bos> by default; Qwen and SmolLM2 prepend nothing. Relying
+    on the default meant gemma trained without a BOS and generated with one,
+    producing runaway repetition (CER 9.12) while its neighbours were fine —
+    invisible until a third tokeniser family appeared.
+    """
+    import inspect
+
+    from ghana_pico_asr.recovery import causal
+    from ghana_pico_asr.recovery.evaluate import score_causal
+
+    assert "add_special_tokens=False" in inspect.getsource(causal.build_example)
+    assert "add_special_tokens=False" in inspect.getsource(score_causal)

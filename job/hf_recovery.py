@@ -57,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--clean-text-repo", default=None,
                     help="HF text dataset for clean pairs; empty string reuses "
                          "the training pairs' own reference_units instead")
+    ap.add_argument("--clean-text-ratio", type=float, default=0.0,
+                    help="pairs from outside text, as a fraction of the real "
+                         "pairs. New sentences the model has never been asked "
+                         "to produce; the only cure for a domain failure")
     ap.add_argument("--clean-ratio", type=float, default=0.0,
                     help="extra pairs built from reference_units, as a fraction "
                          "of the real pairs. Teaches restoration without errors "
@@ -184,8 +188,9 @@ def main(argv=None) -> int:
             min_units=args.min_units,
             machine_ratio=args.machine_ratio,
             clean_ratio=args.clean_ratio,
+            clean_text_ratio=args.clean_text_ratio,
             **({} if args.clean_text_repo is None
-               else {'clean_text_repo': args.clean_text_repo or None}),
+               else {"clean_text_repo": args.clean_text_repo}),
         ),
         limit=args.limit,
         spaced=args.spaced_input,
@@ -241,6 +246,17 @@ def main(argv=None) -> int:
     # Some tokenisers cannot represent Twi at all: t5 emits UNK for Ɔ Ɛ ɔ ɛ and
     # round-trips "Ɔyɛ ne ho" to "y ne ho", silently deleting the two vowels the
     # grapheme inventory exists to carry. Adding them is four tokens.
+    #
+    # It only half works, and the half that fails is not obvious. On a
+    # SentencePiece tokeniser an added token carries word-boundary semantics,
+    # so "Ɔyɛ ne ho" then round-trips to "Ɔ yɛ ne ho" and "yɛhunu" to
+    # "yɛ hunu" — every word with ɛ or ɔ *mid-word* gains a space, and Twi is
+    # full of them. The model learns that faithfully and can never emit
+    # correctly spaced Twi. AddedToken(normalized=True) does not help.
+    #
+    # So this makes such a model trainable, not competitive. Fixing it properly
+    # means rebuilding the SentencePiece model. A tokeniser with native ɛ/ɔ
+    # (gemma-3) or byte-level BPE (Qwen, SmolLM2) has no such ceiling.
     added = 0
     if args.extend_tokenizer:
         alphabet = set("abcdefghijklmnopqrstuvwxyzɛɔ")
@@ -408,6 +424,12 @@ def main(argv=None) -> int:
             dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             use_safetensors=True,
         )
+        # The adapter was trained against a resized embedding matrix, so the
+        # base it loads into must be resized identically. Without this the
+        # shapes differ by the added tokens (and by whatever padding the
+        # original matrix carried) and the load fails outright.
+        if added:
+            base.resize_token_embeddings(len(tok))
         model = PeftModel.from_pretrained(base, args.eval_only)
         if forced_bos is not None:
             for owner in (model, getattr(model, "base_model", None)):

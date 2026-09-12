@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--machine-ratio", type=float, default=0.5)
     ap.add_argument("--clean-text-repo", default=None)
     ap.add_argument("--extend-tokenizer", action="store_true")
+    ap.add_argument("--clean-text-ratio", type=float, default=0.0)
     ap.add_argument("--clean-ratio", type=float, default=0.0,
                     help="add pairs built from reference_units at this fraction")
     ap.add_argument("--spaced-input", action="store_true")
@@ -123,6 +124,7 @@ def main(argv=None) -> int:
         "--max-uer", str(args.max_uer),
         "--machine-ratio", str(args.machine_ratio),
         "--clean-ratio", str(args.clean_ratio),
+        "--clean-text-ratio", str(args.clean_text_ratio),
         "--max-source-len", str(args.max_source_len),
         "--max-target-len", str(args.max_target_len),
         "--eval-n", str(args.eval_n),

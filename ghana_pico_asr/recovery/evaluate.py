@@ -125,6 +125,12 @@ def score_causal(
                 padding=True,
                 truncation=True,
                 max_length=max_source_len + 16,
+                # Must match `build_example`, which uses add_special_tokens=False.
+                # Gemma prepends <bos> by default where Qwen and SmolLM2 prepend
+                # nothing, so leaving this to the default trains without a BOS
+                # and generates with one — a prompt the model never saw, which
+                # surfaces as runaway repetition rather than an error (CER 9.12).
+                add_special_tokens=False,
             ).to(device)
             out = model.generate(
                 **enc,

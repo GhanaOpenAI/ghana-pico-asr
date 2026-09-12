@@ -64,8 +64,13 @@ class PairFilter:
     #: Sources to exclude outright, by id.
     exclude_sources: frozenset = field(default_factory=frozenset)
 
-    #: Extra training pairs built from `reference_units` instead of the
-    #: recogniser's output, as a fraction of the real pairs. 0 disables.
+    #: Extra pairs built from the training samples' own `reference_units`,
+    #: as a fraction of the real pairs. 0 disables.
+    #:
+    #: Same sentence, correct units: the model sees the utterance it will also
+    #: meet corrupted, paired with what the units *should* have been. That
+    #: isolates the restoration half on exactly the material the recogniser
+    #: gets wrong.
     #:
     #: The reference units are the target text with word boundaries,
     #: capitalisation, apostrophes and punctuation stripped, so a clean pair
@@ -73,15 +78,23 @@ class PairFilter:
     #: correct. Real pairs teach restoration and correction at once, which is
     #: harder to learn from alone.
     #:
-    #: Below 1.0 on purpose: at inference the model only ever sees noisy units,
-    #: so training too heavily on clean input teaches it to trust what it is
-    #: given — a better formatter and a worse corrector.
     clean_ratio: float = 0.0
 
-    #: Where clean pairs come from. A text dataset id builds them from raw
-    #: sentences; None reuses the training pairs' own `reference_units`, which
-    #: teaches the mapping but leaves the text distribution unchanged.
-    clean_text_repo: str | None = CLEAN_TEXT_REPO
+    #: Extra pairs built from an outside text corpus, as a fraction of the real
+    #: pairs. Independent of `clean_ratio`: the two teach different things and
+    #: are meant to be combined.
+    #:
+    #: Same-corpus clean pairs fix the mapping but leave the text distribution
+    #: untouched — and that distribution is what failed to transfer to Waxal.
+    #: Outside text is the only source of new *sentences*.
+    #:
+    #: Both are clean, so neither teaches correction. Weighting them heavily
+    #: risks a model that formats well and corrects poorly, since at inference
+    #: it only ever sees noisy units.
+    clean_text_ratio: float = 0.0
+
+    #: Which corpus outside text comes from.
+    clean_text_repo: str = CLEAN_TEXT_REPO
 
 
 def pair_uer(units: str, reference_units: str) -> float:
@@ -171,6 +184,14 @@ def split_pairs(rows: list[dict], val_pct: int = 2, test_pct: int = 2) -> dict:
     """
     out = {"train": [], "val": [], "test": []}
     for r in rows:
+        # Clean pairs never leave the training set. Their input is already
+        # correct, so scoring on them measures formatting on free wins and
+        # deflates both CER and the baseline — a 2:1 clean mix moved the
+        # reported baseline from 0.4395 to 0.2876 while nothing about the task
+        # had changed.
+        if r.get("origin") not in (None, "real"):
+            out["train"].append(r)
+            continue
         b = _bucket(r["text"])
         if b < val_pct:
             out["val"].append(r)
@@ -293,33 +314,38 @@ def load_pairs(
         r["target_text"] = r["text"].strip()
         r["origin"] = "real"
 
-    if flt.clean_ratio > 0 and flt.clean_text_repo:
-        # Clean pairs from *other* text: broadens the range of sentences the
-        # model has been asked to produce, which same-corpus clean pairs cannot
-        # do — their text distribution is the one that failed to transfer.
-        n_clean = int(len(kept) * flt.clean_ratio)
-        clean = clean_pairs_from_text(
-            n_clean, language=language, repo_id=flt.clean_text_repo, spaced=spaced,
-            min_units=flt.min_units, seed=seed,
-        )
-        kept = kept + clean
-        random.Random(seed + 1).shuffle(kept)
-        report["clean_added"] = len(clean)
-        report["clean_source"] = flt.clean_text_repo
-    elif flt.clean_ratio > 0:
+    extra: list[dict] = []
+
+    if flt.clean_ratio > 0:
+        # The training sentences again, with the units they should have had.
         pool = [r for r in kept if (r.get("reference_units") or "").strip()]
-        n_clean = int(len(kept) * flt.clean_ratio)
         rng = random.Random(seed + 1)
-        clean = []
-        for r in rng.sample(pool, min(n_clean, len(pool))):
+        for r in rng.sample(pool, min(int(len(kept) * flt.clean_ratio), len(pool))):
             c = dict(r)
             c["source_text"] = format_source(r["reference_units"], spaced=spaced)
-            c["origin"] = "clean"
+            c["origin"] = "clean-ref"
             c["uer"] = 0.0
-            clean.append(c)
-        kept = kept + clean
-        rng.shuffle(kept)
-        report["clean_added"] = len(clean)
+            extra.append(c)
+        report["clean_ref_added"] = len(extra)
+
+    if flt.clean_text_ratio > 0:
+        # New sentences the model has never been asked to produce.
+        from_text = clean_pairs_from_text(
+            int(len(kept) * flt.clean_text_ratio),
+            language=language, repo_id=flt.clean_text_repo, spaced=spaced,
+            min_units=flt.min_units, seed=seed,
+        )
+        extra += from_text
+        report["clean_text_added"] = len(from_text)
+        report["clean_text_source"] = flt.clean_text_repo
+
+    if extra:
+        kept = kept + extra
+        random.Random(seed + 2).shuffle(kept)
+        report["mix"] = {
+            k: sum(1 for r in kept if r.get("origin") == k)
+            for k in ("real", "clean-ref", "clean-text")
+        }
 
     report["final"] = len(kept)
     report["spaced_input"] = spaced

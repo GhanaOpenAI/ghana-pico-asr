@@ -208,11 +208,11 @@ def test_clean_pairs_use_reference_units_and_are_marked():
 
     src = _io.open("ghana_pico_asr/recovery/data.py", encoding="utf-8").read()
     assert 'format_source(r["reference_units"]' in src
-    assert 'c["origin"] = "clean"' in src
+    assert 'c["origin"] = "clean-ref"' in src
     # Real pairs stay labelled, so a run can report what it actually trained on.
     assert 'r["origin"] = "real"' in src
     # The count is reported, not silent.
-    assert 'report["clean_added"]' in src
+    assert 'report["clean_ref_added"]' in src
 
 
 def test_clean_augmentation_preserves_the_target():
@@ -257,6 +257,33 @@ def test_tokenizer_extension_trains_the_new_embeddings():
     assert src.index("resize_token_embeddings") < src.index("get_peft_model")
 
 
+def test_the_two_clean_sources_are_independent():
+    """They teach different things and are meant to combine.
+
+    Same-corpus clean pairs give the model the utterance it will meet
+    corrupted, paired with the units it should have had — fixing the mapping on
+    exactly the material the recogniser gets wrong. Outside text is the only
+    source of sentences it has never been asked to produce, which is what
+    failed to transfer to Waxal. Picking one or the other, as an earlier
+    version did, gets only half the job.
+    """
+    import io as _io
+
+    from ghana_pico_asr.recovery.data import PairFilter
+
+    f = PairFilter(clean_ratio=0.5, clean_text_ratio=2.0)
+    assert f.clean_ratio == 0.5 and f.clean_text_ratio == 2.0
+
+    src = _io.open("ghana_pico_asr/recovery/data.py", encoding="utf-8").read()
+    body = src[src.index("    extra: list[dict] = []"):src.index('    report["final"]')]
+    # Two independent ifs, not if/elif — both can contribute to one run.
+    assert body.count("if flt.clean") == 2
+    assert "elif" not in body
+    assert '"clean-ref"' in body and '"clean-text"' in body
+    # The realised mix is reported, so a run records what it actually trained on.
+    assert 'report["mix"]' in body
+
+
 def test_clean_text_source_is_a_different_register():
     """Same-corpus clean pairs cannot fix a domain failure: their text
     distribution is the one that failed to transfer."""
@@ -266,3 +293,67 @@ def test_clean_text_source_is_a_different_register():
     # Defaults to the external corpus, not reference_units.
     assert PairFilter().clean_text_repo == CLEAN_TEXT_REPO
     assert PairFilter().clean_ratio == 0.0   # still opt-in
+
+
+def test_clean_pairs_never_reach_val_or_test():
+    """Their input is already correct, so they are free wins that deflate both
+    CER and the baseline. Mixing 2:1 clean moved the reported baseline from
+    0.4395 to 0.2876 with nothing about the task changed."""
+    from ghana_pico_asr.recovery.data import split_pairs
+
+    rows = [{"text": f"sentence {i}", "origin": "real"} for i in range(500)]
+    rows += [{"text": f"clean {i}", "origin": "clean-text"} for i in range(500)]
+    rows += [{"text": f"cref {i}", "origin": "clean-ref"} for i in range(200)]
+    out = split_pairs(rows)
+
+    for split in ("val", "test"):
+        assert all(r["origin"] == "real" for r in out[split]), split
+    assert sum(1 for r in out["train"] if r["origin"] != "real") == 700
+    # Rows with no origin at all still split normally.
+    assert split_pairs([{"text": f"x{i}"} for i in range(400)])["val"]
+
+
+def test_sentencepiece_extension_has_a_spacing_ceiling():
+    """Adding ɛ/ɔ to a SentencePiece tokeniser breaks word spacing.
+
+    An added token carries word-boundary semantics, so the tokeniser cannot
+    round-trip its own input: "Ɔyɛ ne ho" becomes "Ɔ yɛ ne ho" and "yɛhunu"
+    becomes "yɛ hunu". Every Twi word with ɛ or ɔ mid-word gains a space, and
+    no amount of training can recover it. Recorded so nobody re-runs the
+    experiment expecting a different answer.
+    """
+    pytest.importorskip("sentencepiece")
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("google-t5/t5-base")
+    tok.add_tokens(["Ɔ", "Ɛ", "ɔ", "ɛ"])
+    rt = lambda s: tok.decode(  # noqa: E731
+        tok(s, add_special_tokens=False)["input_ids"], skip_special_tokens=True
+    ).strip()
+
+    assert rt("Ɔyɛ ne ho") == "Ɔ yɛ ne ho"   # mid-word ɛ/ɔ gains a space
+    assert rt("yɛhunu") == "yɛ hunu"
+    assert rt("Amanneɛ") == "Amanneɛ"        # word-final is unaffected
+
+    # The models we prefer have no such ceiling.
+    for name in ("Qwen/Qwen2.5-0.5B", "google/gemma-3-270m"):
+        t = AutoTokenizer.from_pretrained(name)
+        assert t.decode(t("Ɔyɛ ne ho")["input_ids"],
+                        skip_special_tokens=True).strip() == "Ɔyɛ ne ho", name
+
+
+def test_eval_only_resizes_the_base_model_too():
+    """An adapter trained with added tokens carries a resized embedding matrix.
+
+    `--eval-only` builds a fresh base model, so it must apply the same resize
+    before loading — otherwise the shapes differ by the added tokens plus the
+    original matrix's padding (t5-base: 32,104 against 32,128) and the load
+    fails.
+    """
+    import io as _io
+
+    src = _io.open("job/hf_recovery.py", encoding="utf-8").read()
+    branch = src[src.index("if args.eval_only:"):src.index("trainer.model = model")]
+    assert "base.resize_token_embeddings(len(tok))" in branch
+    # And before the adapter is attached, not after.
+    assert branch.index("resize_token_embeddings") < branch.index("PeftModel.from_pretrained")
