@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-uer", type=float, default=0.5)
     ap.add_argument("--machine-ratio", type=float, default=0.5)
     ap.add_argument("--min-units", type=int, default=8)
+    ap.add_argument("--clean-ratio", type=float, default=0.0,
+                    help="extra pairs built from reference_units, as a fraction "
+                         "of the real pairs. Teaches restoration without errors "
+                         "to correct; too high and the model learns to trust "
+                         "its input instead of fixing it")
     ap.add_argument("--spaced-input", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--pairs-repo", default=None)
@@ -61,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "'restore twi: ' for the T5 family, which has no "
                          "language conditioning to tell it what to do")
     ap.add_argument("--push-to", default=None, help="HF model repo to publish to")
+    ap.add_argument("--eval-only", default=None, metavar="ADAPTER_DIR",
+                    help="skip training; load this saved adapter and score it")
+    ap.add_argument("--eval-pairs", default=None, metavar="JSONL",
+                    help="score against these pairs instead of the held-out "
+                         "training split. Use the Waxal set: its targets are "
+                         "human transcripts, where the training corpora are "
+                         "63%% machine transcript, so this measures correctness "
+                         "rather than agreement with another recogniser")
     return ap
 
 
@@ -164,6 +177,7 @@ def main(argv=None) -> int:
             max_uer=args.max_uer,
             min_units=args.min_units,
             machine_ratio=args.machine_ratio,
+            clean_ratio=args.clean_ratio,
         ),
         limit=args.limit,
         spaced=args.spaced_input,
@@ -171,6 +185,20 @@ def main(argv=None) -> int:
     )
     splits = split_pairs(rows)
     report["splits"] = {k: len(v) for k, v in splits.items()}
+
+    if args.eval_pairs:
+        # An external, human-transcribed test set replaces the held-out split.
+        from ghana_pico_asr.recovery.data import format_source
+
+        ext = []
+        with open(args.eval_pairs, encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                r["source_text"] = format_source(r["units"], spaced=args.spaced_input)
+                r["target_text"] = r["text"].strip()
+                ext.append(r)
+        splits["test"] = ext
+        report["external_test"] = {"path": args.eval_pairs, "n": len(ext)}
     print(f"[data] {json.dumps(report)} in {time.time() - t0:.0f}s", flush=True)
 
     # ---- model --------------------------------------------------------- #
@@ -338,21 +366,40 @@ def main(argv=None) -> int:
             else DataCollatorForSeq2Seq(tok, model=model)
         ),
     )
-    trainer.train()
+    if args.eval_only:
+        from peft import PeftModel
+
+        print(f"[eval-only] loading adapter {args.eval_only}", flush=True)
+        base = loader.from_pretrained(
+            args.base_model,
+            dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            use_safetensors=True,
+        )
+        model = PeftModel.from_pretrained(base, args.eval_only)
+        if forced_bos is not None:
+            for owner in (model, getattr(model, "base_model", None)):
+                gc = getattr(owner, "generation_config", None)
+                if gc is not None:
+                    gc.forced_bos_token_id = forced_bos
+        model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+        trainer.model = model
+    else:
+        trainer.train()
 
     # ---- score on held-out pairs --------------------------------------- #
     from ghana_pico_asr.recovery.evaluate import score_causal, score_model
 
     scorer = score_causal if is_causal else score_model
     metrics = scorer(
-        model, tok, splits["test"][: args.eval_n],
+        trainer.model, tok, splits["test"][: args.eval_n],
         args.lang_code if is_nllb else None,
         max_source_len=args.max_source_len, max_target_len=args.max_target_len,
     )
     print(f"[test] {json.dumps(metrics)}", flush=True)
 
-    model.save_pretrained(os.path.join(out_dir, "final"))
-    tok.save_pretrained(os.path.join(out_dir, "final"))
+    if not args.eval_only:
+        model.save_pretrained(os.path.join(out_dir, "final"))
+        tok.save_pretrained(os.path.join(out_dir, "final"))
     with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as fh:
         json.dump({"data": report, "test": metrics, "args": vars(args)}, fh, indent=2)
 

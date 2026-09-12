@@ -189,3 +189,38 @@ def test_baseline_excludes_the_task_prefix():
     assert 'r.get("raw_source") or r["source_text"]' in src
     job = _io.open("job/hf_recovery.py", encoding="utf-8").read()
     assert 'r["raw_source"] = r["source_text"]' in job
+
+
+def test_clean_pairs_are_off_by_default():
+    """At inference the model only ever sees noisy units. Training heavily on
+    clean input teaches it to trust what it is given — a better formatter and
+    a worse corrector — so this is opt-in."""
+    from ghana_pico_asr.recovery.data import PairFilter
+
+    assert PairFilter().clean_ratio == 0.0
+
+
+def test_clean_pairs_use_reference_units_and_are_marked():
+    """A clean pair teaches restoration alone: the reference units are the
+    target text with boundaries, capitalisation and punctuation stripped, so
+    there are no errors to correct — only the mapping to learn."""
+    import io as _io
+
+    src = _io.open("ghana_pico_asr/recovery/data.py", encoding="utf-8").read()
+    assert 'format_source(r["reference_units"]' in src
+    assert 'c["origin"] = "clean"' in src
+    # Real pairs stay labelled, so a run can report what it actually trained on.
+    assert 'r["origin"] = "real"' in src
+    # The count is reported, not silent.
+    assert 'report["clean_added"]' in src
+
+
+def test_clean_augmentation_preserves_the_target():
+    """Only the source changes; the text being recovered must be identical, or
+    the two pair types teach different tasks."""
+    import io as _io
+
+    src = _io.open("ghana_pico_asr/recovery/data.py", encoding="utf-8").read()
+    block = src[src.index("if flt.clean_ratio > 0:"):src.index('report["final"]')]
+    assert "c = dict(r)" in block          # inherits target_text unchanged
+    assert 'c["target_text"]' not in block  # and never overwrites it

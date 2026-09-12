@@ -77,6 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--full-finetune", action="store_true")
     ap.add_argument("--max-uer", type=float, default=0.5)
     ap.add_argument("--machine-ratio", type=float, default=0.5)
+    ap.add_argument("--clean-ratio", type=float, default=0.0,
+                    help="add pairs built from reference_units at this fraction")
     ap.add_argument("--spaced-input", action="store_true")
     # Tokenisers differ enough that one default truncates: the same Twi target
     # is p99 122 tokens under NLLB, 203 under mT5 and 465 bytes under ByT5.
@@ -84,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-source-len", type=int, default=192)
     ap.add_argument("--max-target-len", type=int, default=192)
     ap.add_argument("--push-to", default=None)
+    ap.add_argument("--eval-n", type=int, default=1000,
+                    help="test rows to score")
+    ap.add_argument("--eval-only", default=None,
+                    help="adapter dir on the bucket, e.g. /work/recovery/full-qwen/final")
+    ap.add_argument("--eval-pairs", default=None,
+                    help="external test pairs on the bucket, e.g. /work/eval/waxal_pairs.jsonl")
 
     ap.add_argument("--flavor", default="l40sx1")
     ap.add_argument("--namespace", default=DEFAULT_NAMESPACE)
@@ -112,8 +120,10 @@ def main(argv=None) -> int:
         "--lora-alpha", str(args.lora_alpha),
         "--max-uer", str(args.max_uer),
         "--machine-ratio", str(args.machine_ratio),
+        "--clean-ratio", str(args.clean_ratio),
         "--max-source-len", str(args.max_source_len),
         "--max-target-len", str(args.max_target_len),
+        "--eval-n", str(args.eval_n),
     ]
     if args.full_finetune:
         train_args.append("--full-finetune")
@@ -123,6 +133,10 @@ def main(argv=None) -> int:
         train_args += ["--limit", "4000", "--eval-n", "200"]
     if args.push_to and not args.smoke:
         train_args += ["--push-to", args.push_to]
+    if args.eval_only:
+        train_args += ["--eval-only", args.eval_only]
+    if args.eval_pairs:
+        train_args += ["--eval-pairs", args.eval_pairs]
 
     cmd = [
         "hf", "jobs", "run", "--detach",

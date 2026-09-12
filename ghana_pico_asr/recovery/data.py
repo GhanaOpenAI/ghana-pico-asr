@@ -55,6 +55,20 @@ class PairFilter:
     #: Sources to exclude outright, by id.
     exclude_sources: frozenset = field(default_factory=frozenset)
 
+    #: Extra training pairs built from `reference_units` instead of the
+    #: recogniser's output, as a fraction of the real pairs. 0 disables.
+    #:
+    #: The reference units are the target text with word boundaries,
+    #: capitalisation, apostrophes and punctuation stripped, so a clean pair
+    #: teaches *only* the restoration half of the job, with no errors to
+    #: correct. Real pairs teach restoration and correction at once, which is
+    #: harder to learn from alone.
+    #:
+    #: Below 1.0 on purpose: at inference the model only ever sees noisy units,
+    #: so training too heavily on clean input teaches it to trust what it is
+    #: given — a better formatter and a worse corrector.
+    clean_ratio: float = 0.0
+
 
 def pair_uer(units: str, reference_units: str) -> float:
     """Unit error rate of one pair against its own reference."""
@@ -205,6 +219,23 @@ def load_pairs(
     for r in kept:
         r["source_text"] = format_source(r["units"], spaced=spaced)
         r["target_text"] = r["text"].strip()
+        r["origin"] = "real"
+
+    if flt.clean_ratio > 0:
+        pool = [r for r in kept if (r.get("reference_units") or "").strip()]
+        n_clean = int(len(kept) * flt.clean_ratio)
+        rng = random.Random(seed + 1)
+        clean = []
+        for r in rng.sample(pool, min(n_clean, len(pool))):
+            c = dict(r)
+            c["source_text"] = format_source(r["reference_units"], spaced=spaced)
+            c["origin"] = "clean"
+            c["uer"] = 0.0
+            clean.append(c)
+        kept = kept + clean
+        rng.shuffle(kept)
+        report["clean_added"] = len(clean)
+
     report["final"] = len(kept)
     report["spaced_input"] = spaced
     return kept, report
