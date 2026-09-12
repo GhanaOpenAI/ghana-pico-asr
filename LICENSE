@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 GhanaOpenAI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This licence covers the SOURCE CODE in this repository only.
+
+The trained weights and the published datasets are licensed separately, under
+CC-BY-NC-4.0 (non-commercial), because every training corpus carries that
+term and a derived work cannot be licensed more permissively than its inputs:
+
+  ghanaopenai/ghana-pico-asr-twi           model weights
+  ghanaopenai/twi-grapheme-unit-features   aligned feature store
+  ghanaopenai/twi-grapheme-unit-pairs      (units, text) pairs
+
+So: the code may be used commercially; the released weights and data may not.
+Training your own weights on your own data leaves you free of that restriction.

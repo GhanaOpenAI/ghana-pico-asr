@@ -25,7 +25,9 @@ It is **not a speech-to-text system.** It outputs sounds, not words. Turning
   (isolated accuracy 0.398 vs 0.438). It will tend to "correct" what a speaker
   actually said toward what it expects — exactly the errors a pronunciation
   scorer must surface. Use a narrow-context variant for that.
-- **Non-commercial only.** Every training corpus is CC-BY-NC-4.0.
+- **Non-commercial only.** These weights are CC-BY-NC-4.0, inherited from the
+  training corpora. The *code* that produced them is MIT, so retraining on a
+  corpus you may use commercially carries no such restriction.
 - **Not a language identifier.** It will happily emit Twi units for audio in
   any language.
 - **English code-switching is filtered, not modelled.** See below.

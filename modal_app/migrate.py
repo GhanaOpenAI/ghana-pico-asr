@@ -74,6 +74,7 @@ def _token() -> str:
 
 
 CARD = """---
+license: cc-by-nc-4.0
 language: [tw, ak]
 task_categories: [automatic-speech-recognition]
 tags: [speech, forced-alignment, phoneme-recognition, mel-spectrogram, twi, akan, ghana-pico-asr]
@@ -179,8 +180,14 @@ at **https://github.com/ghanaopenai/ghana-pico-asr**.
 
 ## Provenance and licence
 
-Each source corpus keeps its own terms; consult the datasets linked above
-before redistribution or commercial use. No audio is included here.
+**CC-BY-NC-4.0 — non-commercial.** Every source corpus carries that term, and
+a derived work cannot be licensed more permissively than its inputs.
+
+The *code* that produced this store is MIT
+([ghana-pico-asr](https://github.com/ghanaopenai/ghana-pico-asr)), so running
+the same pipeline over a corpus you may use commercially leaves you
+unrestricted. Consult the source datasets linked above before redistributing.
+No audio is included here.
 """
 
 

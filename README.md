@@ -359,5 +359,18 @@ tests/           79 tests, no GPU / network / Modal needed
 
 ## Licence
 
-Code CC-BY-NC-4.0. The training corpora are CC-BY-NC-4.0, so models trained
-from them are **non-commercial**. See [MODEL_CARD.md](MODEL_CARD.md).
+Split, because the code and the weights have different constraints.
+
+| | licence | |
+|---|---|---|
+| this source code | **MIT** | use it for anything, including commercially |
+| [released weights](https://huggingface.co/ghanaopenai/ghana-pico-asr-twi) | CC-BY-NC-4.0 | non-commercial |
+| [feature store](https://huggingface.co/datasets/ghanaopenai/twi-grapheme-unit-features) | CC-BY-NC-4.0 | non-commercial |
+| [(units, text) pairs](https://huggingface.co/datasets/ghanaopenai/twi-grapheme-unit-pairs) | CC-BY-NC-4.0 | non-commercial |
+
+Every training corpus is CC-BY-NC-4.0, and a derived work cannot be licensed
+more permissively than its inputs — so the weights and the data inherit that
+term. The code does not: train on your own corpus and nothing here restricts
+what you do with the result.
+
+See [LICENSE](LICENSE) and [MODEL_CARD.md](MODEL_CARD.md).
